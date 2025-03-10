@@ -8,8 +8,8 @@ The easiest way to get started is to download and run the wrapper script:
 
 ```bash
 curl -O https://github.com/cwccie/nettools-scripts/blob/main/run_nettools.sh
-chmod +x run_nettools.sh
-./run_nettools.sh
+sudo chmod +x run_nettools.sh
+sudo ./run_nettools.sh
 ```
 
 This script will clone this repository and guide you through the available options.
