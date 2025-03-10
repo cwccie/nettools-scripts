@@ -7,7 +7,7 @@ A collection of scripts to set up, diagnose, and fix the nettools network packet
 The easiest way to get started is to download and run the wrapper script:
 
 ```bash
-curl -O https://github.com/cwccie/nettools-scripts/blob/main/run_nettools.sh
+curl -O https://raw.githubusercontent.com/cwccie/nettools-scripts/main/run_nettools.sh
 sudo chmod +x run_nettools.sh
 sudo ./run_nettools.sh
 ```
