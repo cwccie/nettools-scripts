@@ -46,7 +46,8 @@ apt-get upgrade -y
 
 echo -e "${GREEN}-> Installing core dependencies...${NC}"
 apt-get install -y python3 python3-venv python3-dev python3-pip
-apt-get install -y net-tools tshark tcpdump wireshark
+echo "wireshark-common wireshark-common/install-setuid boolean true" | debconf-set-selections
+DEBIAN_FRONTEND=noninteractive apt-get install -y net-tools tshark tcpdump wireshark
 apt-get install -y nginx
 apt-get install -y dos2unix
 
