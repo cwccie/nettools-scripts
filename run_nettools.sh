@@ -28,7 +28,7 @@ if ! command -v git &> /dev/null; then
 fi
 
 # Repository URL
-REPO_URL="https://github.com/yourusername/nettools-scripts.git"
+REPO_URL="https://github.com/cwccie/nettools-scripts.git"
 
 # Clone or update repository
 if [ ! -d "nettools-scripts" ]; then
