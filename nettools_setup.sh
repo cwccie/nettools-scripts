@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# nettools_setup.sh - Complete setup script for the nettools application
+# nettools_setup_complete.sh - Complete setup script for the nettools application
 #
 # This script performs a complete setup of the nettools application with all required
-# dependencies. It handles system updates, package installation, user creation,
-# directory setup, and application configuration.
+# dependencies, including proper dashboard configuration. It handles system updates, 
+# package installation, user creation, directory setup, and application configuration.
 #
-# Usage: sudo bash nettools_setup.sh
+# Usage: sudo bash nettools_setup_complete.sh
 #
 
 # Exit on any error
@@ -77,7 +77,8 @@ echo -e "\n${YELLOW}3. Directory Structure Setup${NC}"
 
 echo -e "${GREEN}-> Creating application directory structure...${NC}"
 mkdir -p ${BASE_DIR}
-mkdir -p ${BASE_DIR}/app/{auth,capture,dashboard,api,utils}/{templates,static}
+mkdir -p ${BASE_DIR}/app/{auth,capture,dashboard,api,utils}
+mkdir -p ${BASE_DIR}/app/templates/{auth,dashboard,capture}
 mkdir -p ${BASE_DIR}/app/static/{css,js,img}
 mkdir -p ${BASE_DIR}/tests/{unit,integration,fixtures}
 mkdir -p ${BASE_DIR}/pcap_files
@@ -122,419 +123,137 @@ echo -e "\n${YELLOW}6. Creating Configuration Files${NC}"
 
 # Create config.py
 echo -e "${GREEN}-> Creating config.py...${NC}"
-cat > ${BASE_DIR}/config.py << 'EOF'
-import os
-from datetime import timedelta
-
-class Config:
-    """Base configuration."""
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
-    PCAP_STORAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pcap_files')
-    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max upload size
-    PERMANENT_SESSION_LIFETIME = timedelta(days=1)
-    SESSION_TYPE = 'filesystem'
-    SESSION_PERMANENT = True
-    SESSION_USE_SIGNER = True
-    
-    # InfluxDB settings
-    INFLUXDB_URL = os.environ.get('INFLUXDB_URL', 'http://localhost:8086')
-    INFLUXDB_TOKEN = os.environ.get('INFLUXDB_TOKEN', '')
-    INFLUXDB_ORG = os.environ.get('INFLUXDB_ORG', 'packet_capture')
-    INFLUXDB_BUCKET = os.environ.get('INFLUXDB_BUCKET', 'network_metrics')
-    
-    # Logging settings
-    LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
-    LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    
-    # Security settings
-    CSRF_ENABLED = True
-    BCRYPT_LOG_ROUNDS = 13
-
-class DevelopmentConfig(Config):
-    """Development configuration."""
-    DEBUG = True
-    TESTING = False
-    BCRYPT_LOG_ROUNDS = 4  # Lower rounds for faster tests
-
-class TestingConfig(Config):
-    """Testing configuration."""
-    DEBUG = False
-    TESTING = True
-    BCRYPT_LOG_ROUNDS = 4
-    PCAP_STORAGE_PATH = '/tmp/pcap_test'
-    WTF_CSRF_ENABLED = False
-
-class ProductionConfig(Config):
-    """Production configuration."""
-    DEBUG = False
-    TESTING = False
-    
-    # In production, ensure these are set as environment variables
-    SECRET_KEY = os.environ.get('SECRET_KEY')
-    
-    # Use secure cookies in production
-    SESSION_COOKIE_SECURE = True
-    REMEMBER_COOKIE_SECURE = True
-    SESSION_COOKIE_HTTPONLY = True
-    REMEMBER_COOKIE_HTTPONLY = True
-    
-    # Content Security Policy
-    CONTENT_SECURITY_POLICY = {
-        'default-src': "'self'",
-        'script-src': "'self'",
-        'style-src': "'self'",
-        'img-src': "'self' data:",
-        'font-src': "'self'",
-        'connect-src': "'self'"
-    }
-
-config = {
-    'development': DevelopmentConfig,
-    'testing': TestingConfig,
-    'production': ProductionConfig,
-    'default': DevelopmentConfig
-}
-EOF
-
-# Create run.py
-echo -e "${GREEN}-> Creating run.py...${NC}"
-cat > ${BASE_DIR}/run.py << 'EOF'
-#!/usr/bin/env python3
-import os
-import sys
-import traceback
-
-try:
-    from app import app, socketio
-    
-    if __name__ == '__main__':
-        host = os.environ.get('HOST', '0.0.0.0')  # Default to 0.0.0.0 for external access
-        port = int(os.environ.get('PORT', 5000))
-        debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
-        
-        print(f"Starting nettools on http://{host}:{port}")
-        print(f"Debug mode: {debug}")
-        
-        try:
-            # First try with allow_unsafe_werkzeug (newer versions of Flask-SocketIO)
-            socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
-        except TypeError:
-            # Fall back to old syntax if allow_unsafe_werkzeug is not supported
-            socketio.run(app, host=host, port=port, debug=debug)
-            
-except Exception as e:
-    print(f"ERROR: Failed to start nettools application: {str(e)}")
-    print("Traceback:")
-    traceback.print_exc()
-    sys.exit(1)
-EOF
-
-# Create app/__init__.py
-echo -e "${GREEN}-> Creating app/__init__.py...${NC}"
-cat > ${BASE_DIR}/app/__init__.py << 'EOF'
-import os
-import logging
-from flask import Flask, redirect, url_for
-from flask_socketio import SocketIO
-from flask_login import LoginManager
-from flask_wtf.csrf import CSRFProtect
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
-from prometheus_flask_exporter import PrometheusMetrics
-from pythonjsonlogger import jsonlogger
-
-# Configure logging
-logger = logging.getLogger('nettools')
-handler = logging.StreamHandler()
-formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
-handler.setFormatter(formatter)
-logger.addHandler(handler)
-logger.setLevel(logging.INFO)
-
-# Initialize extensions
-socketio = SocketIO()
-login_manager = LoginManager()
-csrf = CSRFProtect()
-limiter = Limiter(key_func=get_remote_address)
-metrics = None  # Will be initialized with app
-
-def create_app(config_name=None):
-    """Create and configure the Flask application."""
-    if config_name is None:
-        config_name = os.environ.get('FLASK_CONFIG', 'default')
-    
-    # Create Flask app
-    app = Flask(__name__)
-    
-    # Load configuration
-    from config import config
-    app.config.from_object(config[config_name])
-    
-    # Ensure PCAP storage directory exists
-    os.makedirs(app.config['PCAP_STORAGE_PATH'], exist_ok=True)
-    
-    # Initialize extensions
-    socketio.init_app(app, cors_allowed_origins="*", async_mode='gevent')
-    login_manager.init_app(app)
-    login_manager.login_view = 'auth.login'
-    login_manager.login_message_category = 'info'
-    csrf.init_app(app)
-    limiter.init_app(app)
-    
-    # Initialize PrometheusMetrics with the app
-    global metrics
-    metrics = PrometheusMetrics(app)
-    
-    # Custom metrics
-    metrics.info('app_info', 'Application info', version='1.0.0')
-    
-    # User loader for Flask-Login
-    @login_manager.user_loader
-    def load_user(user_id):
-        # Simple user loader for development
-        from app.auth.models import User
-        return User(user_id, "admin")
-    
-    # Root route redirects to dashboard
-    @app.route('/')
-    def index():
-        return redirect(url_for('dashboard.index'))
-    
-    # Register blueprints
-    try:
-        from app.auth.routes import auth_bp
-        app.register_blueprint(auth_bp)
-    except ImportError:
-        logger.warning("Auth module not fully available")
-    
-    try:
-        from app.dashboard.routes import dashboard_bp
-        app.register_blueprint(dashboard_bp)
-    except ImportError:
-        logger.warning("Dashboard module not fully available")
-    
-    try:
-        from app.capture.routes import capture_bp
-        app.register_blueprint(capture_bp)
-    except ImportError:
-        logger.warning("Capture module not fully available")
-    
-    try:
-        from app.api.auth import api_auth_bp
-        app.register_blueprint(api_auth_bp, url_prefix='/api/auth')
-    except ImportError:
-        logger.warning("API auth module not fully available")
-    
-    try:
-        from app.api.dashboard import api_dashboard_bp
-        app.register_blueprint(api_dashboard_bp, url_prefix='/api/dashboard')
-    except ImportError:
-        logger.warning("API dashboard module not fully available")
-    
-    try:
-        from app.api.capture import api_capture_bp
-        app.register_blueprint(api_capture_bp, url_prefix='/api/capture')
-    except ImportError:
-        logger.warning("API capture module not fully available")
-    
-    return app, socketio
-
-app, socketio = create_app()
-EOF
+cat > ${BASE_DIR}/config.py << 'EOF
 
 # ---------------------------------------------------
-# 7. Create Basic Module Files
+# 8. Create Start Script and Service
 # ---------------------------------------------------
-echo -e "\n${YELLOW}7. Creating Basic Module Files${NC}"
+echo -e "\n${YELLOW}8. Creating Start Script and Service${NC}"
 
-# Auth module
-echo -e "${GREEN}-> Creating auth module files...${NC}"
-touch ${BASE_DIR}/app/auth/__init__.py
+# Create start script
+echo -e "${GREEN}-> Creating start_nettools.sh...${NC}"
+cat > ${BASE_DIR}/start_nettools.sh << 'EOF'
+#!/bin/bash
+#
+# nettools - Web-Based Network Packet Capture Tool
+# Startup Script
+#
 
-cat > ${BASE_DIR}/app/auth/models.py << 'EOF'
-from flask_login import UserMixin
+# Change to the application directory
+cd /opt/nettools
 
-class User(UserMixin):
-    """Simple User model for development."""
-    
-    def __init__(self, id, username, email=None):
-        self.id = id
-        self.username = username
-        self.email = email
-        
-    def get_id(self):
-        return str(self.id)
+# Activate the virtual environment
+source venv/bin/activate
+
+# Set environment variables
+export FLASK_APP=run.py
+export FLASK_DEBUG=true
+export HOST=0.0.0.0
+export PORT=5000
+
+echo "Starting nettools on http://0.0.0.0:5000"
+echo "Press Ctrl+C to stop"
+
+# Start the application
+python run.py
 EOF
 
-cat > ${BASE_DIR}/app/auth/routes.py << 'EOF'
-from flask import Blueprint, redirect, url_for, request, flash, render_template
-from flask_login import login_user, logout_user, login_required
-from app.auth.models import User
+chmod +x ${BASE_DIR}/start_nettools.sh
 
-auth_bp = Blueprint('auth', __name__)
+# Create systemd service file
+echo -e "${GREEN}-> Creating systemd service file...${NC}"
+cat > /etc/systemd/system/nettools.service << 'EOF'
+[Unit]
+Description=nettools - Web-Based Network Packet Capture Tool
+After=network.target
 
-@auth_bp.route('/login', methods=['GET', 'POST'])
-def login():
-    """Auto-login for development purposes."""
-    if request.method == 'POST':
-        # Create and log in a dummy user for development
-        dummy_user = User("dev_user", "admin")
-        login_user(dummy_user)
-        
-        # Redirect to requested page or default to dashboard
-        next_page = request.args.get('next', url_for('dashboard.index'))
-        flash('You have been automatically logged in for development purposes.', 'info')
-        return redirect(next_page)
-    
-    return render_template('auth/login.html', title='Login')
+[Service]
+User=nettools_user
+Group=nettools_user
+WorkingDirectory=/opt/nettools
+ExecStart=/opt/nettools/venv/bin/python /opt/nettools/run.py
+Restart=on-failure
+RestartSec=10
+Environment=FLASK_DEBUG=true
+Environment=HOST=0.0.0.0
+Environment=PORT=5000
 
-@auth_bp.route('/logout')
-@login_required
-def logout():
-    """Logout route."""
-    logout_user()
-    flash('You have been logged out.', 'info')
-    return redirect(url_for('auth.login'))
+[Install]
+WantedBy=multi-user.target
 EOF
 
-# Create auth templates
-mkdir -p ${BASE_DIR}/app/templates/auth
-cat > ${BASE_DIR}/app/templates/auth/login.html << 'EOF'
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Login - nettools</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 0;
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        .container {
-            max-width: 400px;
-            margin: 50px auto;
-            background-color: white;
-            padding: 20px;
-            border-radius: 5px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-        }
-        h1 {
-            color: #333;
-            text-align: center;
-        }
-        .form-group {
-            margin-bottom: 15px;
-        }
-        label {
-            display: block;
-            margin-bottom: 5px;
-        }
-        .form-control {
-            width: 100%;
-            padding: 8px;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            box-sizing: border-box;
-        }
-        .btn {
-            display: inline-block;
-            padding: 8px 16px;
-            background-color: #4CAF50;
-            color: white;
-            text-decoration: none;
-            border-radius: 4px;
-            border: none;
-            cursor: pointer;
-            width: 100%;
-        }
-        .alert {
-            padding: 15px;
-            margin-bottom: 20px;
-            border: 1px solid transparent;
-            border-radius: 4px;
-        }
-        .alert-info {
-            color: #31708f;
-            background-color: #d9edf7;
-            border-color: #bce8f1;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>nettools Login</h1>
-        
-        <div class="alert alert-info">
-            This is a development version. Click Login to continue.
-        </div>
-        
-        <form method="POST">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            
-            <div class="form-group">
-                        <label>
-                            <input type="checkbox" id="live-capture" name="live_capture" checked>
-                            Live Capture
-                        </label>
-                    </div>
-                    <button type="submit" class="btn" id="start-capture">Start Capture</button>
-                </form>
-            </div>
-        </div>
-        
-        <div id="capture-results" style="display: none;">
-            <div class="card">
-                <div class="card-header">
-                    <span>Capture Results</span>
-                    <button class="btn btn-danger" id="stop-capture" style="float: right;">Stop Capture</button>
-                </div>
-                <div>
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>#</th>
-                                <th>Time</th>
-                                <th>Source</th>
-                                <th>Destination</th>
-                                <th>Protocol</th>
-                                <th>Length</th>
-                                <th>Info</th>
-                            </tr>
-                        </thead>
-                        <tbody id="packets-tbody">
-                            <tr>
-                                <td colspan="7" style="text-align: center;">No packets captured yet</td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-    </div>
+systemctl daemon-reload
+systemctl enable nettools.service
 
-    <script>
-        // Capture form submission
-        document.getElementById('capture-form').addEventListener('submit', function(e) {
-            e.preventDefault();
-            
-            // Show capture results
-            document.getElementById('capture-results').style.display = 'block';
-            
-            // Placeholder alert
-            alert('Capture functionality is in development.');
-        });
+# ---------------------------------------------------
+# 9. Set Permissions
+# ---------------------------------------------------
+echo -e "\n${YELLOW}9. Setting Permissions${NC}"
 
-        // Stop capture button
-        document.getElementById('stop-capture').addEventListener('click', function() {
-            alert('Stop capture functionality is in development.');
-        });
-    </script>
-</body>
-</html>
-EOF
+find ${BASE_DIR} -type d -exec chmod 755 {} \;
+find ${BASE_DIR} -type f -exec chmod 644 {} \;
+chmod +x ${BASE_DIR}/run.py
+chmod +x ${BASE_DIR}/start_nettools.sh
+
+# Special permissions for data directories
+chmod 770 ${BASE_DIR}/pcap_files
+chmod 770 ${BASE_DIR}/logs
+
+# Set ownership
+chown -R nettools_user:nettools_user ${BASE_DIR}
+
+# ---------------------------------------------------
+# 10. Configure Firewall (if needed)
+# ---------------------------------------------------
+echo -e "\n${YELLOW}10. Configuring Firewall${NC}"
+
+# Check if ufw is active
+if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
+    echo -e "${GREEN}-> UFW firewall is active, adding rule for port 5000...${NC}"
+    ufw allow 5000/tcp
+fi
+
+# Check if firewalld is active
+if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
+    echo -e "${GREEN}-> firewalld is active, adding rule for port 5000...${NC}"
+    firewall-cmd --permanent --add-port=5000/tcp
+    firewall-cmd --reload
+fi
+
+# ---------------------------------------------------
+# 11. Start the Service
+# ---------------------------------------------------
+echo -e "\n${YELLOW}11. Starting nettools Service${NC}"
+
+systemctl start nettools.service
+sleep 3  # Give the service a moment to start
+
+# Check if the service is running
+if systemctl is-active --quiet nettools.service; then
+    echo -e "${GREEN}-> nettools service is running successfully!${NC}"
+    systemctl status nettools.service
+else
+    echo -e "${RED}-> nettools service failed to start.${NC}"
+    echo -e "${YELLOW}-> Checking service logs:${NC}"
+    systemctl status nettools.service
+    journalctl -u nettools.service -n 20
+fi
+
+# ---------------------------------------------------
+# Final Summary and Instructions
+# ---------------------------------------------------
+echo -e "${BLUE}=========================================================${NC}"
+echo -e "${BLUE}     nettools Setup Complete!                            ${NC}"
+echo -e "${BLUE}=========================================================${NC}"
+echo -e "\n${GREEN}The nettools application has been installed and configured.${NC}"
+echo -e "\n${GREEN}You can access the application at:${NC}"
+echo -e "  http://$(hostname -I | awk '{print $1}'):5000"
+echo -e "\n${GREEN}Useful commands:${NC}"
+echo -e "  - Check service status: sudo systemctl status nettools.service"
+echo -e "  - View service logs: sudo journalctl -u nettools.service -f"
+echo -e "  - Restart service: sudo systemctl restart nettools.service"
+echo -e "  - Start manually: sudo -u nettools_user ${BASE_DIR}/start_nettools.sh"
+echo -e "\n${GREEN}Thank you for using nettools!${NC}"
 
 # API modules
 echo -e "${GREEN}-> Creating API module files...${NC}"
@@ -822,137 +541,341 @@ cat > ${BASE_DIR}/app/templates/layout.html << 'EOF'
     {% block scripts %}{% endblock %}
 </body>
 </html>
+EOF'
+import os
+from datetime import timedelta
+
+class Config:
+    """Base configuration."""
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-key-change-in-production')
+    PCAP_STORAGE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'pcap_files')
+    MAX_CONTENT_LENGTH = 50 * 1024 * 1024  # 50MB max upload size
+    PERMANENT_SESSION_LIFETIME = timedelta(days=1)
+    SESSION_TYPE = 'filesystem'
+    SESSION_PERMANENT = True
+    SESSION_USE_SIGNER = True
+    
+    # InfluxDB settings
+    INFLUXDB_URL = os.environ.get('INFLUXDB_URL', 'http://localhost:8086')
+    INFLUXDB_TOKEN = os.environ.get('INFLUXDB_TOKEN', '')
+    INFLUXDB_ORG = os.environ.get('INFLUXDB_ORG', 'packet_capture')
+    INFLUXDB_BUCKET = os.environ.get('INFLUXDB_BUCKET', 'network_metrics')
+    
+    # Logging settings
+    LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+    LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    
+    # Security settings
+    CSRF_ENABLED = True
+    BCRYPT_LOG_ROUNDS = 13
+
+class DevelopmentConfig(Config):
+    """Development configuration."""
+    DEBUG = True
+    TESTING = False
+    BCRYPT_LOG_ROUNDS = 4  # Lower rounds for faster tests
+
+class TestingConfig(Config):
+    """Testing configuration."""
+    DEBUG = False
+    TESTING = True
+    BCRYPT_LOG_ROUNDS = 4
+    PCAP_STORAGE_PATH = '/tmp/pcap_test'
+    WTF_CSRF_ENABLED = False
+
+class ProductionConfig(Config):
+    """Production configuration."""
+    DEBUG = False
+    TESTING = False
+    
+    # In production, ensure these are set as environment variables
+    SECRET_KEY = os.environ.get('SECRET_KEY')
+    
+    # Use secure cookies in production
+    SESSION_COOKIE_SECURE = True
+    REMEMBER_COOKIE_SECURE = True
+    SESSION_COOKIE_HTTPONLY = True
+    REMEMBER_COOKIE_HTTPONLY = True
+    
+    # Content Security Policy
+    CONTENT_SECURITY_POLICY = {
+        'default-src': "'self'",
+        'script-src': "'self'",
+        'style-src': "'self'",
+        'img-src': "'self' data:",
+        'font-src': "'self'",
+        'connect-src': "'self'"
+    }
+
+config = {
+    'development': DevelopmentConfig,
+    'testing': TestingConfig,
+    'production': ProductionConfig,
+    'default': DevelopmentConfig
+}
+EOF
+
+# Create run.py
+echo -e "${GREEN}-> Creating run.py...${NC}"
+cat > ${BASE_DIR}/run.py << 'EOF'
+#!/usr/bin/env python3
+import os
+import sys
+import traceback
+
+try:
+    from app import app, socketio
+    
+    if __name__ == '__main__':
+        host = os.environ.get('HOST', '0.0.0.0')  # Default to 0.0.0.0 for external access
+        port = int(os.environ.get('PORT', 5000))
+        debug = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
+        
+        print(f"Starting nettools on http://{host}:{port}")
+        print(f"Debug mode: {debug}")
+        
+        try:
+            # First try with allow_unsafe_werkzeug (newer versions of Flask-SocketIO)
+            socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+        except TypeError:
+            # Fall back to old syntax if allow_unsafe_werkzeug is not supported
+            socketio.run(app, host=host, port=port, debug=debug)
+            
+except Exception as e:
+    print(f"ERROR: Failed to start nettools application: {str(e)}")
+    print("Traceback:")
+    traceback.print_exc()
+    sys.exit(1)
+EOF
+
+# Create app/__init__.py
+echo -e "${GREEN}-> Creating app/__init__.py...${NC}"
+cat > ${BASE_DIR}/app/__init__.py << 'EOF'
+import os
+import logging
+from flask import Flask, redirect, url_for
+from flask_socketio import SocketIO
+from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from prometheus_flask_exporter import PrometheusMetrics
+from pythonjsonlogger import jsonlogger
+
+# Configure logging
+logger = logging.getLogger('nettools')
+handler = logging.StreamHandler()
+formatter = jsonlogger.JsonFormatter('%(timestamp)s %(level)s %(name)s %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
+
+# Initialize extensions
+socketio = SocketIO()
+login_manager = LoginManager()
+csrf = CSRFProtect()
+limiter = Limiter(key_func=get_remote_address)
+metrics = None  # Will be initialized with app
+
+def create_app(config_name=None):
+    """Create and configure the Flask application."""
+    if config_name is None:
+        config_name = os.environ.get('FLASK_CONFIG', 'default')
+    
+    # Create Flask app
+    app = Flask(__name__)
+    
+    # Load configuration
+    from config import config
+    app.config.from_object(config[config_name])
+    
+    # Ensure PCAP storage directory exists
+    os.makedirs(app.config['PCAP_STORAGE_PATH'], exist_ok=True)
+    
+    # Initialize extensions
+    socketio.init_app(app, cors_allowed_origins="*", async_mode='gevent')
+    login_manager.init_app(app)
+    login_manager.login_view = 'auth.login'
+    login_manager.login_message_category = 'info'
+    csrf.init_app(app)
+    limiter.init_app(app)
+    
+    # Initialize PrometheusMetrics with the app
+    global metrics
+    metrics = PrometheusMetrics(app)
+    
+    # Custom metrics
+    metrics.info('app_info', 'Application info', version='1.0.0')
+    
+    # User loader for Flask-Login
+    @login_manager.user_loader
+    def load_user(user_id):
+        # Simple user loader for development
+        from app.auth.models import User
+        return User(user_id, "admin")
+    
+    # Root route redirects to dashboard
+    @app.route('/')
+    def index():
+        return redirect(url_for('dashboard.index'))
+    
+    # Register blueprints
+    from app.auth.routes import auth_bp
+    app.register_blueprint(auth_bp)
+    
+    from app.dashboard.routes import dashboard_bp
+    app.register_blueprint(dashboard_bp)
+    
+    from app.capture.routes import capture_bp
+    app.register_blueprint(capture_bp)
+    
+    from app.api.auth import api_auth_bp
+    app.register_blueprint(api_auth_bp, url_prefix='/api/auth')
+    
+    from app.api.dashboard import api_dashboard_bp
+    app.register_blueprint(api_dashboard_bp, url_prefix='/api/dashboard')
+    
+    from app.api.capture import api_capture_bp
+    app.register_blueprint(api_capture_bp, url_prefix='/api/capture')
+    
+    return app, socketio
+
+app, socketio = create_app()
 EOF
 
 # ---------------------------------------------------
-# 8. Create Start Script and Service
+# 7. Create Basic Module Files
 # ---------------------------------------------------
-echo -e "\n${YELLOW}8. Creating Start Script and Service${NC}"
+echo -e "\n${YELLOW}7. Creating Basic Module Files${NC}"
 
-# Create start script
-echo -e "${GREEN}-> Creating start_nettools.sh...${NC}"
-cat > ${BASE_DIR}/start_nettools.sh << 'EOF'
-#!/bin/bash
-#
-# nettools - Web-Based Network Packet Capture Tool
-# Startup Script
-#
+# Auth module
+echo -e "${GREEN}-> Creating auth module files...${NC}"
+touch ${BASE_DIR}/app/auth/__init__.py
 
-# Change to the application directory
-cd /opt/nettools
+cat > ${BASE_DIR}/app/auth/models.py << 'EOF'
+from flask_login import UserMixin
 
-# Activate the virtual environment
-source venv/bin/activate
-
-# Set environment variables
-export FLASK_APP=run.py
-export FLASK_DEBUG=true
-export HOST=0.0.0.0
-export PORT=5000
-
-echo "Starting nettools on http://0.0.0.0:5000"
-echo "Press Ctrl+C to stop"
-
-# Start the application
-python run.py
+class User(UserMixin):
+    """Simple User model for development."""
+    
+    def __init__(self, id, username, email=None):
+        self.id = id
+        self.username = username
+        self.email = email
+        
+    def get_id(self):
+        return str(self.id)
 EOF
 
-chmod +x ${BASE_DIR}/start_nettools.sh
+cat > ${BASE_DIR}/app/auth/routes.py << 'EOF'
+from flask import Blueprint, redirect, url_for, request, flash, render_template
+from flask_login import login_user, logout_user, login_required
+from app.auth.models import User
 
-# Create systemd service file
-echo -e "${GREEN}-> Creating systemd service file...${NC}"
-cat > /etc/systemd/system/nettools.service << 'EOF'
-[Unit]
-Description=nettools - Web-Based Network Packet Capture Tool
-After=network.target
+auth_bp = Blueprint('auth', __name__)
 
-[Service]
-User=nettools_user
-Group=nettools_user
-WorkingDirectory=/opt/nettools
-ExecStart=/opt/nettools/venv/bin/python /opt/nettools/run.py
-Restart=on-failure
-RestartSec=10
-Environment=FLASK_DEBUG=true
-Environment=HOST=0.0.0.0
-Environment=PORT=5000
+@auth_bp.route('/login', methods=['GET', 'POST'])
+def login():
+    """Auto-login for development purposes."""
+    if request.method == 'POST':
+        # Create and log in a dummy user for development
+        dummy_user = User("dev_user", "admin")
+        login_user(dummy_user)
+        
+        # Redirect to requested page or default to dashboard
+        next_page = request.args.get('next', url_for('dashboard.index'))
+        flash('You have been automatically logged in for development purposes.', 'info')
+        return redirect(next_page)
+    
+    return render_template('auth/login.html', title='Login')
 
-[Install]
-WantedBy=multi-user.target
+@auth_bp.route('/logout')
+@login_required
+def logout():
+    """Logout route."""
+    logout_user()
+    flash('You have been logged out.', 'info')
+    return redirect(url_for('auth.login'))
 EOF
 
-systemctl daemon-reload
-systemctl enable nettools.service
-
-# ---------------------------------------------------
-# 9. Set Permissions
-# ---------------------------------------------------
-echo -e "\n${YELLOW}9. Setting Permissions${NC}"
-
-find ${BASE_DIR} -type d -exec chmod 755 {} \;
-find ${BASE_DIR} -type f -exec chmod 644 {} \;
-chmod +x ${BASE_DIR}/run.py
-chmod +x ${BASE_DIR}/start_nettools.sh
-
-# Special permissions for data directories
-chmod 770 ${BASE_DIR}/pcap_files
-chmod 770 ${BASE_DIR}/logs
-
-# Set ownership
-chown -R nettools_user:nettools_user ${BASE_DIR}
-
-# ---------------------------------------------------
-# 10. Configure Firewall (if needed)
-# ---------------------------------------------------
-echo -e "\n${YELLOW}10. Configuring Firewall${NC}"
-
-# Check if ufw is active
-if command -v ufw &> /dev/null && ufw status | grep -q "active"; then
-    echo -e "${GREEN}-> UFW firewall is active, adding rule for port 5000...${NC}"
-    ufw allow 5000/tcp
-fi
-
-# Check if firewalld is active
-if command -v firewall-cmd &> /dev/null && systemctl is-active --quiet firewalld; then
-    echo -e "${GREEN}-> firewalld is active, adding rule for port 5000...${NC}"
-    firewall-cmd --permanent --add-port=5000/tcp
-    firewall-cmd --reload
-fi
-
-# ---------------------------------------------------
-# 11. Start the Service
-# ---------------------------------------------------
-echo -e "\n${YELLOW}11. Starting nettools Service${NC}"
-
-systemctl start nettools.service
-sleep 3  # Give the service a moment to start
-
-# Check if the service is running
-if systemctl is-active --quiet nettools.service; then
-    echo -e "${GREEN}-> nettools service is running successfully!${NC}"
-    systemctl status nettools.service
-else
-    echo -e "${RED}-> nettools service failed to start.${NC}"
-    echo -e "${YELLOW}-> Checking service logs:${NC}"
-    systemctl status nettools.service
-    journalctl -u nettools.service -n 20
-fi
-
-# ---------------------------------------------------
-# Final Summary and Instructions
-# ---------------------------------------------------
-echo -e "${BLUE}=========================================================${NC}"
-echo -e "${BLUE}     nettools Setup Complete!                            ${NC}"
-echo -e "${BLUE}=========================================================${NC}"
-echo -e "\n${GREEN}The nettools application has been installed and configured.${NC}"
-echo -e "\n${GREEN}You can access the application at:${NC}"
-echo -e "  http://$(hostname -I | awk '{print $1}'):5000"
-echo -e "\n${GREEN}Useful commands:${NC}"
-echo -e "  - Check service status: sudo systemctl status nettools.service"
-echo -e "  - View service logs: sudo journalctl -u nettools.service -f"
-echo -e "  - Restart service: sudo systemctl restart nettools.service"
-echo -e "  - Start manually: sudo -u nettools_user ${BASE_DIR}/start_nettools.sh"
-echo -e "\n${GREEN}Thank you for using nettools!${NC}"
+# Create auth templates
+mkdir -p ${BASE_DIR}/app/templates/auth
+cat > ${BASE_DIR}/app/templates/auth/login.html << 'EOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - nettools</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 400px;
+            margin: 50px auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+        }
+        .form-control {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .btn {
+            display: inline-block;
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            width: 100%;
+        }
+        .alert {
+            padding: 15px;
+            margin-bottom: 20px;
+            border: 1px solid transparent;
+            border-radius: 4px;
+        }
+        .alert-info {
+            color: #31708f;
+            background-color: #d9edf7;
+            border-color: #bce8f1;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>nettools Login</h1>
+        
+        <div class="alert alert-info">
+            This is a development version. Click Login to continue.
+        </div>
+        
+        <form method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            
+            <div class="form-group">
                 <label for="username">Username</label>
                 <input type="text" class="form-control" id="username" name="username" value="admin" readonly>
             </div>
@@ -1353,3 +1276,63 @@ cat > ${BASE_DIR}/app/templates/capture/index.html << 'EOF'
                         <small>Maximum number of packets to capture (0 = unlimited)</small>
                     </div>
                     <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="live-capture" name="live_capture" checked>
+                            Live Capture
+                        </label>
+                    </div>
+                    <button type="submit" class="btn" id="start-capture">Start Capture</button>
+                </form>
+            </div>
+        </div>
+        
+        <div id="capture-results" style="display: none;">
+            <div class="card">
+                <div class="card-header">
+                    <span>Capture Results</span>
+                    <button class="btn btn-danger" id="stop-capture" style="float: right;">Stop Capture</button>
+                </div>
+                <div>
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Time</th>
+                                <th>Source</th>
+                                <th>Destination</th>
+                                <th>Protocol</th>
+                                <th>Length</th>
+                                <th>Info</th>
+                            </tr>
+                        </thead>
+                        <tbody id="packets-tbody">
+                            <tr>
+                                <td colspan="7" style="text-align: center;">No packets captured yet</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Capture form submission
+        document.getElementById('capture-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            // Show capture results
+            document.getElementById('capture-results').style.display = 'block';
+            
+            // Placeholder alert
+            alert('Capture functionality is in development.');
+        });
+
+        // Stop capture button
+        document.getElementById('stop-capture').addEventListener('click', function() {
+            alert('Stop capture functionality is in development.');
+        });
+    </script>
+</body>
+</html>
+EOF
